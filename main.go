@@ -13,13 +13,6 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 }
 
-func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg.fileserverHits.Add(1)
-        fmt.Printf("Site visited! Hits: %d\n", cfg.fileserverHits.Load())
-		next.ServeHTTP(w, r)
-	})
-}
 
 func check(err error) {
     if err != nil {
@@ -27,35 +20,36 @@ func check(err error) {
     }
 }
 
-
-
-
 func main() {
+
+    const port = "8080"
+    const filepathRoot= "./html/app"
+
     mux := http.NewServeMux()
     
     apiCfg := &apiConfig{
         fileserverHits: atomic.Int32{},
     }
     
-    handlerApp := http.StripPrefix("/app/", http.FileServer(http.Dir("./html/app")))
+    handlerApp := http.StripPrefix("/app/", http.FileServer(http.Dir(filepathRoot)))
 
     mux.Handle("/app/", apiCfg.middlewareMetricsInc(handlerApp))
-    mux.HandleFunc("/metrics/", apiCfg.handlerHits)
-    mux.HandleFunc("/reset/", apiCfg.handlerReset)
-    mux.HandleFunc("/healthz/", handlerHealthz)
 
-    port := "8080"
+    mux.HandleFunc("GET /api/healthz", handlerHealthz)
+    mux.HandleFunc("GET /admin/metrics", apiCfg.handlerHits)
+    mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
+    mux.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
 
     ex, err :=  os.Executable()
     check(err)
-    filepathRoot := filepath.Dir(ex)
+    filepathExec := filepath.Dir(ex)
 
     srv := &http.Server{
         Addr: ":8080",
         Handler: mux,
     }
 
-    log.Printf("Serving files from %s on port: %s\n", filepathRoot, port)
+    log.Printf("Serving files from %s executed from %s on port: %s\n", filepathRoot, filepathExec, port)
 
     err = srv.ListenAndServe()
     check(err)
