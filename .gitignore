@@ -1,1 +1,6 @@
 html/assets/*
+*.sh
+.*
+!.gitignore
+
+

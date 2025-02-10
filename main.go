@@ -1,16 +1,21 @@
 package main
 
 import (
+    "database/sql"
+    "github.com/erlint1212/http_go_server_Chirpy/internal/database"
     "fmt"
     "net/http"
     "log"
     "os"
     "path/filepath"
     "sync/atomic" //type that allows us to safely increment and read an integer value across multiple goroutines (HTTP requests).
+    _ "github.com/lib/pq"
+    "github.com/joho/godotenv"
 )
 
 type apiConfig struct {
-	fileserverHits atomic.Int32
+    fileserverHits atomic.Int32
+    db      *database.Queries
 }
 
 
@@ -21,6 +26,14 @@ func check(err error) {
 }
 
 func main() {
+    godotenv.Load()
+
+    dbURL := os.Getenv("DB_URL")
+
+    db, err := sql.Open("postgres", dbURL)
+    check(err)
+
+    dbQueries := database.New(db)
 
     const port = "8080"
     const filepathRoot= "./html/app"
@@ -29,6 +42,7 @@ func main() {
     
     apiCfg := &apiConfig{
         fileserverHits: atomic.Int32{},
+        db:                      dbQueries,
     }
     
     handlerApp := http.StripPrefix("/app/", http.FileServer(http.Dir(filepathRoot)))
@@ -37,8 +51,11 @@ func main() {
 
     mux.HandleFunc("GET /api/healthz", handlerHealthz)
     mux.HandleFunc("GET /admin/metrics", apiCfg.handlerHits)
+    mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetAllChirps)
+    mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
     mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
-    mux.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
+    mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
+    mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 
     ex, err :=  os.Executable()
     check(err)
