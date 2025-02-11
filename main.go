@@ -16,6 +16,7 @@ import (
 type apiConfig struct {
     fileserverHits atomic.Int32
     db      *database.Queries
+    jwt_secret  string
 }
 
 
@@ -29,6 +30,7 @@ func main() {
     godotenv.Load()
 
     dbURL := os.Getenv("DB_URL")
+    jwt_secret := os.Getenv("JWT_SIGNATURE")
 
     db, err := sql.Open("postgres", dbURL)
     check(err)
@@ -43,6 +45,7 @@ func main() {
     apiCfg := &apiConfig{
         fileserverHits: atomic.Int32{},
         db:                      dbQueries,
+        jwt_secret:     jwt_secret,
     }
     
     handlerApp := http.StripPrefix("/app/", http.FileServer(http.Dir(filepathRoot)))
@@ -56,6 +59,7 @@ func main() {
     mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
     mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
     mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
+    mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 
     ex, err :=  os.Executable()
     check(err)

@@ -6,6 +6,7 @@ import (
     "time"
     "github.com/google/uuid"
     "github.com/erlint1212/http_go_server_Chirpy/internal/database"
+    "github.com/erlint1212/http_go_server_Chirpy/internal/auth"
     "fmt"
     "net/http"
     "log"
@@ -82,7 +83,7 @@ func validateChirp(body string) (string, error) {
     const max_len_body = 140
 
     if len(body) > max_len_body {
-        return "", fmt.Errorf("body too long, needs to be %s or less", max_len_body)
+        return "", fmt.Errorf("body too long, needs to be %d or less", max_len_body)
     }
 
     // Extremely inneficent O(m*n), fix with tails strucutre later
@@ -145,6 +146,7 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 
     type parameters struct {
         Email string `json:"email"`
+        Password string `json:"password"`
     }
 
     params := parameters{}
@@ -154,11 +156,27 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
         return
     }
 
+    if params.Email == "" {
+        respondWithError(w, http.StatusUnprocessableEntity, fmt.Errorf("No email set"))
+        return
+    }
+    if params.Password == "" {
+        respondWithError(w, http.StatusUnprocessableEntity, fmt.Errorf("No password set"))
+        return
+    }
+
+    hashed_psw, err := auth.HashPassword(params.Password)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, fmt.Errorf("Failed to hash password"))
+        return
+    }
+
     user_params := database.CreateUserParams{
         ID:        uuid.New(),
         CreatedAt: time.Now(),
         UpdatedAt: time.Now(),
         Email:     params.Email,
+        HashedPassword:  hashed_psw,
     }
 
     new_user, err := cfg.db.CreateUser(context.Background(), user_params)
@@ -196,6 +214,78 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
     respondWithJSON(w, http.StatusCreated, resp_user)
 }
 
+func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
+
+    w.Header().Set("Content-Type", "application/json")
+
+    type parameters struct {
+        Email string `json:"email"`
+        Password string `json:"password"`
+        ExpiresInSeconds int `json:"expires_in_seconds"`
+    }
+
+    params := parameters{}
+
+    OK := decode_json(&params, w, r)
+    if !OK {
+        return
+    }
+
+    if params.Email == "" {
+        respondWithError(w, http.StatusUnprocessableEntity, fmt.Errorf("No email set"))
+        return
+    }
+    if params.Password == "" {
+        respondWithError(w, http.StatusUnprocessableEntity, fmt.Errorf("No password set"))
+        return
+    }
+
+    user, err := cfg.db.GetUserByEmail(context.Background(), params.Email)
+    if errors.Is(err, sql.ErrNoRows) {
+        respondWithError(w, http.StatusUnauthorized, fmt.Errorf("Incorrect email or password"))
+        return
+    }
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, fmt.Errorf("Failed to retrive user: %s", err))
+        return
+    }
+
+    err = auth.CheckPasswordHash(params.Password, user.HashedPassword)
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, fmt.Errorf("Incorrect email or password"))
+        return
+    }
+    
+    expires_in := time.Hour
+    if params.ExpiresInSeconds != 0 {
+        parsed_ExpiresInSeconds := time.Duration(params.ExpiresInSeconds) * time.Second
+        expires_in = time.Duration(parsed_ExpiresInSeconds)
+    }
+    token, err := auth.MakeJWT(user.ID, cfg.jwt_secret, expires_in)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, fmt.Errorf("Failed to make token: %w", err))
+        return
+    }
+
+    type json_user struct {
+        ID        uuid.UUID `json:"id"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
+        Email     string    `json:"email"`
+        Token     string    `json:"token"`
+    }
+
+    resp_user := json_user{
+        ID: user.ID,
+        CreatedAt: user.CreatedAt,
+        UpdatedAt: user.UpdatedAt,
+        Email: user.Email,
+        Token: token,
+    }
+
+    respondWithJSON(w, http.StatusOK, resp_user)
+}
+
 
 func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
 
@@ -207,11 +297,24 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
     }
 
     params := parameters{}
-
     OK := decode_json(&params, w, r)
     if !OK {
         return
     }
+
+    token, err := auth.GetBearerToken(r.Header)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, fmt.Errorf("Failed to get token: %w", err))
+        return 
+    }
+
+    id, err := auth.ValidateJWT(token, cfg.jwt_secret)
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, fmt.Errorf("Failed to validate JWT: %w", err))
+        return 
+    }
+
+    params.UserID = id
 
     clean_body, err := validateChirp(params.Body)
     if err != nil {
@@ -219,7 +322,6 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
         return 
     }
     params.Body = clean_body
-    
 
     chirp_params := database.CreateChirpParams{
         ID:        uuid.New(),
