@@ -1,5 +1,7 @@
 # HTTP server
 
+API designed for mobile apps, so dosen't use cookies
+
 Building a http server scratch using go
 Guided project [link](https://www.boot.dev/courses/learn-http-servers-golang)
 
