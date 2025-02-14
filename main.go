@@ -52,16 +52,22 @@ func main() {
 
     mux.Handle("/app/", apiCfg.middlewareMetricsInc(handlerApp))
 
+    // GET
     mux.HandleFunc("GET /api/healthz", handlerHealthz)
     mux.HandleFunc("GET /admin/metrics", apiCfg.handlerHits)
     mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetAllChirps)
     mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
+    // POST
     mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
     mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
     mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
     mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
     mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
     mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
+    //PUT
+    mux.HandleFunc("PUT /api/users", apiCfg.handlerChangePassword)
+    //DELETE
+    mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerDeleteChirp)
 
     ex, err :=  os.Executable()
     check(err)

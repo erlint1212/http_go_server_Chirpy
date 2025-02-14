@@ -149,6 +149,81 @@ func (cfg *apiConfig) handlerReset(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte("Hits reset to 0"))
 }
 
+func (cfg *apiConfig) handlerChangePassword(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+
+    type parameters struct {
+        Email string `json:"email"`
+        Password string `json:"password"`
+    }
+    
+    access_token, err := auth.GetBearerToken(r.Header)
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, fmt.Errorf("No token found in header"))
+        return
+    }
+
+    user_id, err := auth.ValidateJWT(access_token, cfg.jwt_secret)
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, fmt.Errorf("Failed to validate JWT access token: %w", err))
+        return 
+    }
+
+    params := parameters{}
+
+    OK := decode_json(&params, w, r)
+    if !OK {
+        return
+    }
+
+    if params.Email == "" {
+        respondWithError(w, http.StatusUnprocessableEntity, fmt.Errorf("No email set"))
+        return
+    }
+    if params.Password == "" {
+        respondWithError(w, http.StatusUnprocessableEntity, fmt.Errorf("No password set"))
+        return
+    }
+
+    hashed_psw, err := auth.HashPassword(params.Password)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, fmt.Errorf("Failed to hash password"))
+        return
+    }
+
+    update_params := database.UpdateUserEmailPasswordByUserIDParams{
+        Email:          params.Email,
+        HashedPassword: hashed_psw,
+        ID:             user_id,
+    }
+
+    updated_user, err := cfg.db.UpdateUserEmailPasswordByUserID(context.Background(), update_params)
+    if errors.Is(err, sql.ErrNoRows) {
+        respondWithError(w, http.StatusNotFound, fmt.Errorf("User of JWT token not found in database: %w", err))
+        return
+    }
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, fmt.Errorf("Failed to update user: %s", err))
+        return
+    }
+
+    type json_user struct {
+        ID        uuid.UUID `json:"id"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
+        Email     string    `json:"email"`
+    }
+
+    resp_user := json_user{
+        ID: updated_user.ID,
+        CreatedAt: updated_user.CreatedAt,
+        UpdatedAt: updated_user.UpdatedAt,
+        Email: updated_user.Email,
+    }
+
+    respondWithJSON(w, http.StatusOK, resp_user)
+
+}
 
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
 
@@ -338,7 +413,6 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
         respondWithError(w, http.StatusUnauthorized, fmt.Errorf("Refresh token has expired, expired at %s", old_token_full.ExpiresAt.String()))
         return 
     }
-    log.Println("Check revoked")
     if old_token_full.RevokedAt.Valid {
         respondWithError(w, http.StatusUnauthorized, fmt.Errorf("Refresh token has been revoked, revoked at %s", old_token_full.RevokedAt.Time.String()))
         return 
@@ -498,6 +572,59 @@ func (cfg *apiConfig) handlerGetAllChirps(w http.ResponseWriter, r *http.Request
 
     respondWithJSON(w, http.StatusOK, out_chirps)
 }
+func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request) {
+
+    chirp_id := r.PathValue("chirpID")
+	chirp_id_uuid, err := uuid.Parse(chirp_id)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, fmt.Errorf("Failed to parse chirp id from string to uuid: %s", err))
+        return
+    }
+
+    access_token, err := auth.GetBearerToken(r.Header)
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, fmt.Errorf("No token found in header"))
+        return
+    }
+
+    user_id, err := auth.ValidateJWT(access_token, cfg.jwt_secret)
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, fmt.Errorf("Failed to validate JWT access token: %w", err))
+        return 
+    }
+
+    chirps, err := cfg.db.GetChirpByID(context.Background(), chirp_id_uuid)
+    if errors.Is(err, sql.ErrNoRows) {
+        respondWithError(w, http.StatusNotFound, fmt.Errorf("No chirp found for chirp id %v", chirp_id_uuid))
+        return
+    }
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, err)
+        return
+    }
+    if chirps.UserID != user_id {
+        respondWithError(w, http.StatusForbidden, fmt.Errorf("User is not owner of chirp"))
+        return 
+    }
+
+
+    delete_arg_params := database.DeleteChirpByChirpIDAndUserIDParams{
+        ID:     chirp_id_uuid,
+        UserID: user_id,
+    }
+
+    err = cfg.db.DeleteChirpByChirpIDAndUserID(context.Background(), delete_arg_params)
+    if errors.Is(err, sql.ErrNoRows) {
+        respondWithError(w, http.StatusNotFound, fmt.Errorf("No chirp found for chirp id: %v and user id: %v", chirp_id, user_id))
+        return
+    }
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, err)
+        return
+    }
+
+    w.WriteHeader(http.StatusNoContent)
+}
 
 func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, r *http.Request) {
 
@@ -539,3 +666,4 @@ func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, r *http.Request) {
 
     respondWithJSON(w, http.StatusOK, resp_chirp)
 }
+
