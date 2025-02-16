@@ -1,6 +1,7 @@
 package main
 
 import (
+    "sort"
     "errors"
     "database/sql"
     "time"
@@ -212,6 +213,7 @@ func (cfg *apiConfig) handlerChangePassword(w http.ResponseWriter, r *http.Reque
         CreatedAt time.Time `json:"created_at"`
         UpdatedAt time.Time `json:"updated_at"`
         Email     string    `json:"email"`
+        IsChirpyRed bool    `json:"is_chirpy_red"`
     }
 
     resp_user := json_user{
@@ -219,6 +221,7 @@ func (cfg *apiConfig) handlerChangePassword(w http.ResponseWriter, r *http.Reque
         CreatedAt: updated_user.CreatedAt,
         UpdatedAt: updated_user.UpdatedAt,
         Email: updated_user.Email,
+        IsChirpyRed: updated_user.IsChirpyRed,
     }
 
     respondWithJSON(w, http.StatusOK, resp_user)
@@ -279,6 +282,7 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
         CreatedAt time.Time `json:"created_at"`
         UpdatedAt time.Time `json:"updated_at"`
         Email     string    `json:"email"`
+        IsChirpyRed bool    `json:"is_chirpy_red"`
     }
 
     resp_user := json_user{
@@ -286,6 +290,7 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
         CreatedAt: new_user.CreatedAt,
         UpdatedAt: new_user.UpdatedAt,
         Email: new_user.Email,
+        IsChirpyRed: new_user.IsChirpyRed,
     }
 
     /*
@@ -374,6 +379,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
         UpdatedAt time.Time `json:"updated_at"`
         Email     string    `json:"email"`
         Token     string    `json:"token"`
+        IsChirpyRed bool    `json:"is_chirpy_red"`
         Refresh_token string `json:"refresh_token"`
     }
 
@@ -383,6 +389,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
         UpdatedAt: user.UpdatedAt,
         Email: user.Email,
         Token: token,
+        IsChirpyRed: user.IsChirpyRed,
         Refresh_token: refresh_token_string,
     }
 
@@ -540,10 +547,35 @@ func (cfg *apiConfig) handlerGetAllChirps(w http.ResponseWriter, r *http.Request
 
     w.Header().Set("Content-Type", "application/json")
 
-    chirps, err := cfg.db.GetAllChirps(context.Background())
-    if err != nil {
-        respondWithError(w, http.StatusInternalServerError, err)
-        return
+    query_author_id := r.URL.Query().Get("author_id")
+    query_sort := r.URL.Query().Get("sort")
+
+	var chirps []database.Chirp
+
+    if query_author_id == "" {
+        inter_chirps, err := cfg.db.GetAllChirps(context.Background())
+        if err != nil {
+            respondWithError(w, http.StatusInternalServerError, err)
+            return
+        }
+        chirps = inter_chirps
+    } else {
+        user_id_uuid, err := uuid.Parse(query_author_id)
+        if err != nil {
+            respondWithError(w, http.StatusInternalServerError, fmt.Errorf("Failed to parse user id from string to uuid: %s", err))
+            return
+        }
+
+        inter_chirps, err := cfg.db.GetAllChirpsByUserID(context.Background(), user_id_uuid)
+        if err != nil {
+            respondWithError(w, http.StatusInternalServerError, err)
+            return
+        }
+        chirps = inter_chirps
+    }
+
+    if query_sort == "desc" {
+        sort.Slice(chirps, func(i, j int) bool { return chirps[i].CreatedAt.After(chirps[j].CreatedAt) })
     }
 
     type json_chirp struct {
@@ -620,6 +652,63 @@ func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request)
     }
     if err != nil {
         respondWithError(w, http.StatusInternalServerError, err)
+        return
+    }
+
+    w.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg *apiConfig) handlerUpgradeUserToRed(w http.ResponseWriter, r *http.Request) {
+
+    w.Header().Set("Content-Type", "application/json")
+
+    type parameters struct {
+        Event string `json:"event"`
+        Data  struct {
+            UserID string `json:"user_id"`
+        } `json:"data"`
+    }
+
+    params := parameters{}
+    OK := decode_json(&params, w, r)
+    if !OK {
+        return
+    }
+
+    if params.Event != "user.upgraded" {
+        respondWithError(w, http.StatusNoContent, fmt.Errorf("Only accepts user.upgrade as an event"))
+        return
+    }
+
+    user_auth_key, err := auth.GetAPIKey(r.Header)
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, fmt.Errorf("Failed to extract API key from header: %w", err))
+        return
+    }
+
+    if user_auth_key != cfg.polka_key {
+        respondWithError(w, http.StatusUnauthorized, fmt.Errorf("Given auth key is not valid"))
+        return
+    }
+
+	user_id, err := uuid.Parse(params.Data.UserID)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, fmt.Errorf("Failed to parse id from string to uuid: %s", err))
+        return
+    }
+
+    arg_params := database.UpdateUserIsChirpyRedByUserIDParams{
+        IsChirpyRed: true,
+        ID:          user_id,
+    }
+
+    _, err = cfg.db.UpdateUserIsChirpyRedByUserID(context.Background(), arg_params)
+    if errors.Is(err, sql.ErrNoRows) {
+        respondWithError(w, http.StatusNotFound, fmt.Errorf("No user found for id %v", user_id))
+        return
+    }
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, fmt.Errorf("Failed to update database: %w", err))
         return
     }
 

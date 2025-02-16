@@ -5,7 +5,6 @@ import (
     "net/http"
     "golang.org/x/crypto/bcrypt"
     "strings"
-    "log"
 )
 
 func CheckPasswordHash(password, hash string) error {
@@ -14,28 +13,40 @@ func CheckPasswordHash(password, hash string) error {
 }
 
 func GetBearerToken(header http.Header) (string, error) {
-    /*
-    auths := header.Get("Authorization")
-    if auths == []string{} {
+    auth_string := header.Get("Authorization")
+    if auth_string == "" {
         return "", fmt.Errorf("No authorization header")
     }
-
-    token := ""
-    for i := range(auths) {
-        split_auths := strings.Split(auths, " ")
-        if split_auths[0] == "Bearer" {
-            token = split_auths[1]
-            break;
-        }
+    
+    auth_string_split := strings.Split(auth_string, " ")
+    if len(auth_string_split) != 2 {
+        return "", fmt.Errorf("Authorization header not structured correctly, should be \"ApiKey THE_KEY_HERE\"")
     }
-    */
-    token := header.Get("Authorization")
-    if token == "" {
+
+    if auth_string_split[0] != "Bearer" {
         return "", fmt.Errorf("No Bearer in authorization header")
     }
-    
-    log.Println(token)
-    token = strings.Split(token, " ")[1]
-    log.Println(token)
+
+    token := auth_string_split[1]
     return token, nil
+}
+
+func GetAPIKey(header http.Header) (string, error) {
+    auth_string := header.Get("Authorization")
+    if auth_string == "" {
+        return "", fmt.Errorf("No authorization header")
+    }
+    
+    auth_string_split := strings.Split(auth_string, " ")
+    if len(auth_string_split) != 2 {
+        return "", fmt.Errorf("Authorization header not structured correctly, should be \"ApiKey THE_KEY_HERE\"")
+    }
+
+    if auth_string_split[0] != "ApiKey" {
+        return "", fmt.Errorf("No ApiKey in authorization header")
+    }
+
+    api_key := auth_string_split[1]
+
+    return api_key, nil
 }
